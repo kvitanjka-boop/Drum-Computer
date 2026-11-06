@@ -2,12 +2,13 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Drumcomputer 3D</title>
 <style>
-  html,body{margin:0;height:100%;background:#0d0f14;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#aeb4c2}
+  html,body{margin:0;height:100%;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;background:#0d0f14;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#aeb4c2}
   canvas{display:block;touch-action:none}
-  #hud{position:fixed;left:14px;bottom:12px;font-size:13px;line-height:1.55;pointer-events:none}
+  #hud{position:fixed;left:14px;bottom:calc(10px + env(safe-area-inset-bottom));right:14px;-webkit-text-size-adjust:100%;font-size:13px;line-height:1.55;pointer-events:none}
+  @media (pointer:coarse){#hud{font-size:11px}#readout{font-size:14px!important}}
   #readout{color:#fff;font-weight:600;font-size:16px;min-height:1.5em}
 </style>
 <script type="importmap">
@@ -20,7 +21,7 @@
 <body>
 <div id="hud">
   <div id="readout">&nbsp;</div>
-  <div>Pads anklicken · Knöpfe mit der Maus hoch/runter ziehen · Leertaste = Play/Stop · Leere Fläche ziehen = drehen, Mausrad = Zoom</div>
+  <div id="hint">Pads anklicken · Knöpfe mit der Maus hoch/runter ziehen · Leertaste = Play/Stop · Leere Fläche ziehen = drehen, Mausrad = Zoom</div>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -66,6 +67,8 @@ const engine = {
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.noise = buf;
+    const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    s.connect(ctx.destination); s.start(0);
   },
   ratio(t) { return 0.5 * Math.pow(2, t * 2); },
   gain(t, peak, dec) {
@@ -262,8 +265,11 @@ function makeKnob(x, z, color, value, onChange, fmt, name) {
     mk(new THREE.CylinderGeometry(0.34, 0.34, 0.06, 32), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }), 0, 0.53, 0, rot),
     mk(new THREE.BoxGeometry(0.09, 0.08, 0.42), new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.4 }), 0, 0.55, -0.2, rot),
   ];
+  const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.9, 16), new THREE.MeshBasicMaterial());
+  proxy.position.y = 0.4; proxy.visible = false; g.add(proxy);
+  parts.push(proxy);
   const k = {
-    type: 'knob', name, value: 0,
+    type: 'knob', name, value: 0, def: value,
     set(v, silent) {
       this.value = Math.min(1, Math.max(0, v));
       rot.rotation.y = -(this.value - 0.5) * Math.PI * 1.5;
@@ -335,6 +341,10 @@ label('SWING', -3.2, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
 label('VOLUME', -0.9, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
 label('DRUMCOMPUTER', 8.2, -8.3, 9, 1.3, { font: 96, color: '#ff851b', weight: 800 });
 
+const machine = new THREE.Group();
+[...scene.children].filter(o => !o.isLight && o !== floor).forEach(o => machine.add(o));
+scene.add(machine);
+
 /* ---------------------------------------------------------------- Steuerung */
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
 function pick(e) {
@@ -344,19 +354,24 @@ function pick(e) {
   const h = ray.intersectObjects(hits, false)[0];
   return h ? h.object.userData.ref : null;
 }
-let drag = null, controls;
+let drag = null, controls, lastTap = { ref: null, t: 0 };
 canvas.addEventListener('pointerdown', e => {
   engine.init();
   const ref = pick(e);
   if (!ref) return;
+  if (drag) return;                       // zweiter Finger während eines Knopf-Drags
   controls.enabled = false;
   if (ref.type === 'knob') {
-    drag = { ref, y: e.clientY, v: ref.value };
+    const now = performance.now();
+    if (lastTap.ref === ref && now - lastTap.t < 400) { ref.set(ref.def); lastTap = { ref: null, t: 0 }; return; }
+    lastTap = { ref, t: now };
+    drag = { ref, y: e.clientY, v: ref.value, id: e.pointerId };
     canvas.setPointerCapture(e.pointerId);
     readout.textContent = `${ref.name}`;
   } else if (ref.type === 'pad') {
     pattern[ref.r][ref.i] = !pattern[ref.r][ref.i];
     if (pattern[ref.r][ref.i]) engine.trigger(ref.r, engine.ctx.currentTime);
+    if (navigator.vibrate) navigator.vibrate(8);
   } else if (ref.type === 'audition') {
     engine.trigger(ref.r, engine.ctx.currentTime);
   } else if (ref.type === 'play') {
@@ -367,39 +382,49 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   if (drag) {
-    drag.ref.set(drag.v + (drag.y - e.clientY) / (e.shiftKey ? 600 : 200));
-  } else {
+    if (e.pointerId === drag.id) drag.ref.set(drag.v + (drag.y - e.clientY) / (e.shiftKey ? 600 : 200));
+  } else if (e.pointerType === 'mouse') {
     canvas.style.cursor = pick(e) ? 'pointer' : 'grab';
   }
 });
-const release = () => { drag = null; if (controls) controls.enabled = true; };
+const release = e => {
+  if (drag && e && e.pointerId !== drag.id) return;
+  drag = null; if (controls) controls.enabled = true;
+  engine.init();                          // iOS: Audio erst nach Loslassen sicher freigeschaltet
+};
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
-canvas.addEventListener('dblclick', e => {
-  const ref = pick(e);
-  if (ref && ref.type === 'knob') ref.set(ref.name.endsWith('LEVEL') ? 0.8 : ref.name === 'TEMPO' ? 0.4286 : ref.name === 'SWING' ? 0 : ref.name === 'VOLUME' ? 0.8 : 0.5);
-});
 addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); engine.init(); toggle(); }
 });
 
 controls = new OrbitControls(camera, canvas);
-controls.enablePan = false; controls.enableDamping = true;
+controls.enablePan = true; controls.screenSpacePanning = true; controls.enableDamping = true;
+controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
 controls.minPolarAngle = 0.15; controls.maxPolarAngle = 1.45;
-controls.minDistance = 8; controls.maxDistance = 60;
+controls.minDistance = 6; controls.maxDistance = 120;
 
 const target = new THREE.Vector3(CX, 0, CZ);
 const dir = new THREE.Vector3(0, 0.9, 0.44).normalize();
+let lastW = 0;
 function fit() {
-  const w = innerWidth, h = innerHeight;
+  const w = innerWidth, h = innerHeight; lastW = w;
+  const portrait = h > w * 1.1;
   renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  machine.rotation.y = portrait ? -Math.PI / 2 : 0; machine.updateMatrixWorld(true);
+  target.set(CX, 0, CZ); machine.localToWorld(target);
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  const d = Math.max(19 / (t * camera.aspect), 11.5 / t);
+  const d = portrait ? Math.max(11 / (t * camera.aspect), 16.5 / t) : Math.max(17.5 / (t * camera.aspect), 10.5 / t);
   camera.position.copy(target).addScaledVector(dir, d);
   controls.target.copy(target); controls.update();
 }
-addEventListener('resize', fit);
+addEventListener('resize', () => {
+  if (innerWidth !== lastW) fit();        // Adressleiste am Handy ein-/ausblenden ändert nur die Höhe
+  else { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+});
 fit();
+if (matchMedia('(pointer:coarse)').matches)
+  document.getElementById('hint').textContent = 'Pads antippen · Knöpfe hoch/runter ziehen · Doppeltippen = zurücksetzen · 1 Finger = verschieben · 2 Finger = zoomen/drehen';
 
 /* ---------------------------------------------------------------- Loop */
 const clock = new THREE.Clock();
