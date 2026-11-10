@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Drumcomputer 3D</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0d0f14">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
   html,body{margin:0;height:100%;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;background:#0d0f14;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#aeb4c2}
   canvas{display:block;touch-action:none}
@@ -13,8 +18,8 @@
 </style>
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
 } }
 </script>
 </head>
@@ -534,6 +539,7 @@ function frame() {
   renderer.render(scene, camera);
 }
 frame();
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 window.__drum = { pattern, params, globals, seq, engine, play, stop, knobs, STYLES, applyStyle, setStyle: (i, sp) => { curStyle = i; curSpeed = sp; applyStyle(); } };
 </script>
 </body>
