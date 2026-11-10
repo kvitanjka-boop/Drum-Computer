@@ -49,7 +49,7 @@ const pattern = INSTR.map(() => new Array(STEPS).fill(false));
 [10].forEach(i => pattern[7][i] = true);
 
 const params = INSTR.map(() => ({ tune: 0.5, decay: 0.5, level: 0.8 }));
-const globals = { bpm: 120, swing: 0, volume: 0.8 };
+const globals = { bpm: 120, swing: 0, volume: 0.8, res: 4 };
 
 /* ---------------------------------------------------------------- Audio */
 const engine = {
@@ -172,7 +172,7 @@ const seq = { playing: false, step: 0, nextTime: 0, queue: [], cur: -1, timer: n
 function scheduler() {
   const ctx = engine.ctx;
   while (seq.nextTime < ctx.currentTime + 0.12) {
-    const dur = 60 / globals.bpm / 4;
+    const dur = 60 / globals.bpm / globals.res;
     const t = seq.nextTime + (seq.step % 2 ? globals.swing * dur * 0.5 : 0);
     for (let r = 0; r < R; r++) if (pattern[r][seq.step]) engine.trigger(r, t);
     seq.queue.push({ step: seq.step, time: t });
@@ -215,13 +215,13 @@ Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 18, bottom: -18, n
 scene.add(sun);
 
 const BODY_TOP = 0.5;
-const CX = -0.3, CZ = -0.75;
+const CX = -0.3, CZ = 0.5;
 
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: '#141720', roughness: 0.9 }));
 floor.rotation.x = -Math.PI / 2; floor.position.y = -0.5; floor.receiveShadow = true;
 scene.add(floor);
 
-const body = new THREE.Mesh(new THREE.BoxGeometry(30, 1, 18.5), new THREE.MeshStandardMaterial({ color: '#262a34', roughness: 0.55, metalness: 0.2 }));
+const body = new THREE.Mesh(new THREE.BoxGeometry(30, 1, 21), new THREE.MeshStandardMaterial({ color: '#262a34', roughness: 0.55, metalness: 0.2 }));
 body.position.set(CX, 0, CZ); body.castShadow = body.receiveShadow = true;
 scene.add(body);
 
@@ -354,7 +354,7 @@ label('TEMPO-VORGABEN', 8.2, -6.55, 8, 0.4, { font: 40, color: '#8890a0' });
 tempoKnob = makeKnob(-5.5, -8.3, '#e8e8e8', (globals.bpm - 60) / 140,
   v => { globals.bpm = Math.round(60 + v * 140); lcd.set(globals.bpm + ' BPM', '#9dff6a'); },
   () => globals.bpm + ' BPM', 'TEMPO');
-makeKnob(-3.2, -8.3, '#e8e8e8', 0, v => { globals.swing = v; }, v => Math.round(v * 100) + ' %', 'SWING');
+const swingKnob = makeKnob(-3.2, -8.3, '#e8e8e8', 0, v => { globals.swing = v; }, v => Math.round(v * 100) + ' %', 'SWING');
 makeKnob(-0.9, -8.3, '#e8e8e8', globals.volume, v => { globals.volume = v; if (engine.master) engine.master.gain.value = v; }, v => Math.round(v * 100) + ' %', 'VOLUME');
 label('TEMPO', -5.5, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
 label('SWING', -3.2, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
@@ -364,6 +364,50 @@ label('DRUMCOMPUTER', 8.2, -8.3, 9, 1.3, { font: 96, color: '#ff851b', weight: 8
 const machine = new THREE.Group();
 [...scene.children].filter(o => !o.isLight && o !== floor).forEach(o => machine.add(o));
 scene.add(machine);
+
+/* Rhythmen: Stil x Geschwindigkeit */
+const E = '................';
+// Spuren: k=Kick s=Snare c=Clap h=HH zu o=HH offen t=Tom r=Rim w=Cowbell
+const STYLES = [
+  { n: 'ROCK',   bpm: [80, 120, 160],  sw: 0,    res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x...', o: '..............x.' } },
+  { n: 'BLUES',  bpm: [60, 90, 130],   sw: 0.67, res: 2, p: { k: 'x...x...x...x...', s: '..x...x...x...x.', h: 'xxxxxxxxxxxxxxxx' } },
+  { n: 'HIP-HOP',bpm: [75, 90, 100],   sw: 0.35, res: 4, p: { k: 'x.....x...x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.', o: '.............x..' } },
+  { n: 'TRAP',   bpm: [120, 140, 160], sw: 0,    res: 4, p: { k: 'x.........x.....', s: '........x.......', c: '........x.......', h: 'x.x.x.x.x.x.xxxx' } },
+  { n: 'SOUL',   bpm: [70, 90, 115],   sw: 0.3,  res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.', r: '......x.......x.' } },
+  { n: 'FUNK',   bpm: [95, 108, 120],  sw: 0.2,  res: 4, p: { k: 'x..x...x..x.....', s: '....x..x.x..x...', h: 'xxxxxxxxxxxxxxxx', o: '......x.......x.' } },
+  { n: 'DISCO',  bpm: [110, 120, 128], sw: 0,    res: 4, p: { k: 'x...x...x...x...', s: '....x.......x...', c: '....x.......x...', h: '.x.x.x.x.x.x.x.x', o: '..x...x...x...x.' } },
+  { n: 'REGGAE', bpm: [65, 75, 85],    sw: 0.15, res: 4, p: { k: '........x.......', r: '........x.......', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'HOUSE',  bpm: [118, 124, 130], sw: 0,    res: 4, p: { k: 'x...x...x...x...', c: '....x.......x...', h: '.x.x.x.x.x.x.x.x', o: '..x...x...x...x.' } },
+  { n: 'TECHNO', bpm: [128, 135, 145], sw: 0,    res: 4, p: { k: 'x...x...x...x...', c: '....x.......x...', h: 'xxxxxxxxxxxxxxxx', o: '..x...x...x...x.', r: '.x.....x..x.....' } },
+  { n: 'POP',    bpm: [95, 110, 125],  sw: 0,    res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', c: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'D&B',    bpm: [160, 170, 180], sw: 0,    res: 4, p: { k: 'x.........x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'JAZZ',   bpm: [90, 120, 160],  sw: 0.67, res: 2, p: { k: 'x.......x.......', s: '...x.......x....', h: 'x.xxx.xxx.xxx.xx' } },
+  { n: 'LATIN',  bpm: [90, 105, 120],  sw: 0.1,  res: 4, p: { k: 'x.....x.x.....x.', r: 'x..x..x...x.x...', h: 'x.x.x.x.x.x.x.x.', w: 'x...x...x...x...' } },
+];
+const SPEEDS = ['LANGSAM', 'MITTEL', 'SCHNELL'];
+const KEYS = ['k', 's', 'c', 'h', 'o', 't', 'r', 'w'];
+let curStyle = -1, curSpeed = 1;
+const styleBtns = [], speedBtns = [];
+const styleBox = mk(new THREE.BoxGeometry(7.2, 0.15, 1.2), new THREE.MeshStandardMaterial({ color: '#10160f', roughness: 0.3 }), 2.2, BODY_TOP + 0.07, 9.6);
+const styleLcd = makeText('RHYTHMUS WÄHLEN', 7.0, 1.0, { font: 52, color: '#9dff6a' });
+styleLcd.mesh.position.set(2.2, BODY_TOP + 0.16, 9.6); scene.add(styleLcd.mesh);
+label('RHYTHMEN', -13.7, 7.0, 2.4, 0.4, { font: 38, color: '#8890a0' });
+
+function applyStyle() {
+  if (curStyle < 0) curStyle = 0;
+  const st = STYLES[curStyle];
+  KEYS.forEach((k, r) => { const str = st.p[k] || E; for (let i = 0; i < STEPS; i++) pattern[r][i] = str[i] === 'x'; });
+  globals.res = st.res;
+  swingKnob.set(st.sw, true);
+  setBpm(st.bpm[curSpeed]);
+  styleBtns.forEach((b, i) => b.material.color.set(i === curStyle ? '#e08a10' : '#4a4f66'));
+  speedBtns.forEach((b, i) => b.material.color.set(i === curSpeed ? '#e08a10' : '#4a4f66'));
+  styleLcd.set(`${st.n} · ${SPEEDS[curSpeed]}`, '#9dff6a');
+  readout.textContent = `${st.n} · ${SPEEDS[curSpeed]} · ${globals.bpm} BPM`;
+}
+STYLES.forEach((st, i) => styleBtns.push(makeBtn(-12.5 + i * 1.95, 7.8, 1.75, 0.8, st.n, 38, '#4a4f66', () => { curStyle = i; applyStyle(); })));
+SPEEDS.forEach((n, i) => speedBtns.push(makeBtn(-12.2 + i * 2.5, 9.6, 2.3, 0.9, n, 40, '#4a4f66', () => { curSpeed = i; applyStyle(); })));
+speedBtns[1].material.color.set('#e08a10');
 
 /* ---------------------------------------------------------------- Steuerung */
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -444,7 +488,7 @@ function fit() {
   machine.rotation.y = portrait ? -Math.PI / 2 : 0; machine.updateMatrixWorld(true);
   target.set(CX, 0, CZ); machine.localToWorld(target);
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  const d = portrait ? Math.max(11 / (t * camera.aspect), 16.5 / t) : Math.max(17.5 / (t * camera.aspect), 10.5 / t);
+  const d = portrait ? Math.max(12.5 / (t * camera.aspect), 16.5 / t) : Math.max(17.5 / (t * camera.aspect), 12 / t);
   camera.position.copy(target).addScaledVector(dir, d);
   controls.target.copy(target); controls.update();
 }
@@ -490,7 +534,7 @@ function frame() {
   renderer.render(scene, camera);
 }
 frame();
-window.__drum = { pattern, params, globals, seq, engine, play, stop, knobs };
+window.__drum = { pattern, params, globals, seq, engine, play, stop, knobs, STYLES, applyStyle, setStyle: (i, sp) => { curStyle = i; curSpeed = sp; applyStyle(); } };
 </script>
 </body>
 </html>
