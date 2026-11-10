@@ -21,7 +21,7 @@
 <body>
 <div id="hud">
   <div id="readout">&nbsp;</div>
-  <div id="hint">Pads anklicken · Knöpfe mit der Maus hoch/runter ziehen · Leertaste = Play/Stop · Leere Fläche ziehen = drehen, Mausrad = Zoom</div>
+  <div id="hint">Pads anklicken · Knöpfe mit der Maus hoch/runter ziehen · Leertaste = Play/Stop · Pfeiltasten = BPM · Leere Fläche ziehen = drehen, Mausrad = Zoom</div>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -333,7 +333,27 @@ const clearLabel = makeText('CLEAR', 1.8, 0.8, { font: 52 });
 clearLabel.mesh.position.set(-9.5, BODY_TOP + 0.51, -8.3); scene.add(clearLabel.mesh);
 playMat.emissiveIntensity = 0.3;
 
-makeKnob(-5.5, -8.3, '#e8e8e8', (globals.bpm - 60) / 140, v => { globals.bpm = Math.round(60 + v * 140); }, () => globals.bpm + ' BPM', 'TEMPO');
+/* BPM-Anzeige, −/+ und Tempo-Voreinstellungen */
+const btns = [];
+function makeBtn(x, z, w, d, text, font, color, fn, hold) {
+  const m = mk(new THREE.BoxGeometry(w, 0.4, d), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }), x, BODY_TOP + 0.2, z);
+  m.userData.ref = { type: 'btn', fn, hold, down: 0, baseY: BODY_TOP + 0.2 };
+  hits.push(m); btns.push(m);
+  const l = makeText(text, w - 0.1, d - 0.1, { font }); l.mesh.position.set(x, BODY_TOP + 0.41, z); scene.add(l.mesh);
+  return m;
+}
+const lcdBox = mk(new THREE.BoxGeometry(2.8, 0.15, 1.2), new THREE.MeshStandardMaterial({ color: '#10160f', roughness: 0.3 }), 1.9, BODY_TOP + 0.07, -8.6);
+const lcd = makeText('120 BPM', 2.6, 1.0, { font: 62, color: '#9dff6a' });
+lcd.mesh.position.set(1.9, BODY_TOP + 0.16, -8.6); scene.add(lcd.mesh);
+let tempoKnob;
+const setBpm = b => tempoKnob.set((Math.min(200, Math.max(60, b)) - 60) / 140);
+makeBtn(0.9, -7.35, 1.2, 0.8, '−', 70, '#555b6b', () => setBpm(globals.bpm - 1), true);
+makeBtn(2.9, -7.35, 1.2, 0.8, '+', 70, '#555b6b', () => setBpm(globals.bpm + 1), true);
+[80, 100, 120, 140, 170].forEach((b, i) => makeBtn(5.2 + i * 1.5, -7.2, 1.3, 0.8, String(b), 46, '#3d6fa8', () => setBpm(b)));
+label('TEMPO-VORGABEN', 8.2, -6.55, 8, 0.4, { font: 40, color: '#8890a0' });
+tempoKnob = makeKnob(-5.5, -8.3, '#e8e8e8', (globals.bpm - 60) / 140,
+  v => { globals.bpm = Math.round(60 + v * 140); lcd.set(globals.bpm + ' BPM', '#9dff6a'); },
+  () => globals.bpm + ' BPM', 'TEMPO');
 makeKnob(-3.2, -8.3, '#e8e8e8', 0, v => { globals.swing = v; }, v => Math.round(v * 100) + ' %', 'SWING');
 makeKnob(-0.9, -8.3, '#e8e8e8', globals.volume, v => { globals.volume = v; if (engine.master) engine.master.gain.value = v; }, v => Math.round(v * 100) + ' %', 'VOLUME');
 label('TEMPO', -5.5, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
@@ -354,6 +374,7 @@ function pick(e) {
   const h = ray.intersectObjects(hits, false)[0];
   return h ? h.object.userData.ref : null;
 }
+let holdTimer = null;
 let drag = null, controls, lastTap = { ref: null, t: 0 };
 canvas.addEventListener('pointerdown', e => {
   engine.init();
@@ -378,6 +399,12 @@ canvas.addEventListener('pointerdown', e => {
     ref.down = 1; toggle();
   } else if (ref.type === 'clear') {
     ref.down = 1; pattern.forEach(row => row.fill(false));
+  } else if (ref.type === 'btn') {
+    ref.down = 1; ref.fn();
+    if (ref.hold) {
+      clearTimeout(holdTimer); clearInterval(holdTimer);
+      holdTimer = setTimeout(() => { holdTimer = setInterval(ref.fn, 70); }, 380);
+    }
   }
 });
 canvas.addEventListener('pointermove', e => {
@@ -388,6 +415,7 @@ canvas.addEventListener('pointermove', e => {
   }
 });
 const release = e => {
+  clearTimeout(holdTimer); clearInterval(holdTimer);
   if (drag && e && e.pointerId !== drag.id) return;
   drag = null; if (controls) controls.enabled = true;
   engine.init();                          // iOS: Audio erst nach Loslassen sicher freigeschaltet
@@ -396,6 +424,8 @@ canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); engine.init(); toggle(); }
+  if (e.code === 'ArrowUp' || e.code === 'ArrowRight') { e.preventDefault(); setBpm(globals.bpm + 1); }
+  if (e.code === 'ArrowDown' || e.code === 'ArrowLeft') { e.preventDefault(); setBpm(globals.bpm - 1); }
 });
 
 controls = new OrbitControls(camera, canvas);
@@ -451,9 +481,9 @@ function frame() {
   }
   leds.forEach((l, i) => { l.material.emissiveIntensity = seq.cur === i ? 2 : 0; });
 
-  [playBtn, clearBtn].forEach(b => {
+  [playBtn, clearBtn, ...btns].forEach(b => {
     const ref = b.userData.ref; ref.down = Math.max(0, ref.down - dt * 5);
-    b.position.y = BODY_TOP + 0.25 - ref.down * 0.12;
+    b.position.y = (ref.baseY ?? BODY_TOP + 0.25) - ref.down * 0.12;
   });
 
   controls.update();
