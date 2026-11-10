@@ -1,4 +1,4 @@
-const CACHE = 'drumcomputer-v1';
+const CACHE = 'drumcomputer-v2';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './vendor/three/three.module.js', './vendor/three/addons/controls/OrbitControls.js'];
 self.addEventListener('install', e => {

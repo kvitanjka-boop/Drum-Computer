@@ -366,10 +366,6 @@ label('SWING', -3.2, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
 label('VOLUME', -0.9, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
 label('DRUMCOMPUTER', 8.2, -8.3, 9, 1.3, { font: 96, color: '#ff851b', weight: 800 });
 
-const machine = new THREE.Group();
-[...scene.children].filter(o => !o.isLight && o !== floor).forEach(o => machine.add(o));
-scene.add(machine);
-
 /* Rhythmen: Stil x Geschwindigkeit */
 const E = '................';
 // Spuren: k=Kick s=Snare c=Clap h=HH zu o=HH offen t=Tom r=Rim w=Cowbell
@@ -413,6 +409,10 @@ function applyStyle() {
 STYLES.forEach((st, i) => styleBtns.push(makeBtn(-12.5 + i * 1.95, 7.8, 1.75, 0.8, st.n, 38, '#4a4f66', () => { curStyle = i; applyStyle(); })));
 SPEEDS.forEach((n, i) => speedBtns.push(makeBtn(-12.2 + i * 2.5, 9.6, 2.3, 0.9, n, 40, '#4a4f66', () => { curSpeed = i; applyStyle(); })));
 speedBtns[1].material.color.set('#e08a10');
+
+const machine = new THREE.Group();
+[...scene.children].filter(o => !o.isLight && o !== floor).forEach(o => machine.add(o));
+scene.add(machine);
 
 /* ---------------------------------------------------------------- Steuerung */
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
