@@ -19,7 +19,7 @@
   .app{display:flex;flex-direction:column;gap:10px;padding:10px;padding-bottom:calc(14px + env(safe-area-inset-bottom));min-height:100dvh}
   aside{display:contents}
   .card{background:var(--panel);border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px}
-  #transport{order:1}#gridwrap{order:2}#stylesCard{order:3}#tempoCard{order:4}#panel{order:5}
+  #transport{order:1}#gridwrap{order:2}#stylesCard{order:3}#tempoCard{order:4}
   .row{display:flex;align-items:center;gap:8px}
   .row.wrap{flex-wrap:wrap}
   .grow{flex:1}
@@ -52,7 +52,33 @@
   .lab.sel{outline:2px solid currentColor;outline-offset:-2px}
   .num{font-size:11px;color:var(--mut);display:flex;align-items:center;justify-content:center}
   .num.now{color:#fff;font-weight:800}
-  #saveCard{order:6}
+  #recCard{order:5}#panel{order:6}#saveCard{order:7}
+  button:disabled,input:disabled{opacity:.38;pointer-events:none}
+  #recCard .seg button{height:36px;font-size:12px}
+  .beats{display:flex;gap:8px;margin-left:auto;align-items:center}
+  .beats i{width:22px;height:22px;border-radius:50%;background:#2a2e3a;display:block}
+  .beats i.on{background:#9dff6a;box-shadow:0 0 10px #9dff6a}
+  .beats i.on:first-child{background:#ff6b6b;box-shadow:0 0 10px #ff6b6b}
+  #tracks{display:flex;flex-direction:column;gap:8px}
+  .trk{background:#10131a;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;border-left:5px solid var(--tc)}
+  .trk .head{display:flex;justify-content:space-between;font-size:13px}
+  .trk .head b{color:var(--tc)}
+  .trk .st{color:var(--mut);font-size:12px}
+  .trk .bar{height:6px;border-radius:3px;background:#262a34;overflow:hidden}
+  .trk .bar i{display:block;height:100%;width:0;background:#ff4d4d}
+  .trk .rec{height:42px;padding:0 12px;font-weight:700;background:#8b2230}
+  .trk.armed .rec,.trk.recording .rec{background:#c0392b}
+  .trk.recording .st{color:#ff6b6b;font-weight:700}
+  .trk .m{width:42px;height:42px;font-weight:700}
+  .trk .m.on{background:var(--acc);color:#111}
+  .trk .x{width:42px;height:42px;background:#3a2326;color:#ff8a8a}
+  #recCard .chip{height:38px;padding:0 12px;font-size:13px;font-weight:600}
+  #recCard .chip.on{background:var(--acc);color:#111}
+  #r_export{flex:1;height:44px;background:#2d6cdf;font-weight:700}
+  #r_clearAll{height:44px;padding:0 14px}
+  #r_out a{font-size:14px}
+  #recMsg{font-size:12px;color:var(--mut);margin:0}
+  #saveCard{order:7}
   .txt{flex:1;min-width:0;height:44px;border-radius:10px;border:1px solid #333847;background:#0f1117;color:var(--txt);padding:0 12px;font:inherit;-webkit-user-select:text;user-select:text}
   #saveBtn{height:44px;padding:0 16px;background:#27ae60;font-weight:700}
   #plist{display:flex;flex-direction:column;gap:6px}
@@ -103,6 +129,19 @@
       <div class="chips" id="styles"></div>
       <div class="seg" id="speeds"></div>
     </section>
+    <section class="card" id="recCard">
+      <div class="lbl">AUFNAHME · 4 SPUREN</div>
+      <div class="row"><span class="lbl">LÄNGE</span><div class="seg grow" id="r_loop"></div></div>
+      <div class="row"><span class="lbl">EINZÄHLER</span><div class="seg grow" id="r_count"></div></div>
+      <div class="row"><span class="lbl">METRONOM</span><div class="seg grow" id="r_metro"></div></div>
+      <div class="row"><span class="lbl">QUELLE</span><div class="seg grow" id="r_src"></div></div>
+      <div class="row"><span class="lbl">LATENZ</span><input type="range" id="r_lat" min="0" max="400" step="5"><span class="val" id="r_latV"></span></div>
+      <div class="row"><button class="chip" id="r_mute">Drums stumm</button><div class="beats" id="beats"><i></i><i></i><i></i><i></i></div></div>
+      <div id="tracks"></div>
+      <div class="row"><button id="r_export">Mix als WAV</button><button id="r_clearAll">Alle löschen</button></div>
+      <div id="r_out"></div>
+      <p id="recMsg"></p>
+    </section>
     <section class="card" id="panel">
       <h3 id="panelTitle">KICK</h3>
       <div class="row"><span class="lbl">TUNE</span><input type="range" id="s_tune" min="0" max="100"><span class="val" id="v_tune"></span></div>
@@ -121,11 +160,13 @@
 </div>
 
 <script type="module">
-import { STEPS, INSTR, pattern, params, globals, engine, seq, toggle, STYLES, SPEEDS, loadStyle, getState, applyState } from './core.js';
+import { STEPS, INSTR, pattern, params, globals, engine, seq, play, toggle, STYLES, SPEEDS, loadStyle, getState, applyState } from './core.js';
+import { createRecorder, TRACK_COLORS } from './recorder.js';
 
 const $ = s => document.querySelector(s);
 const R = INSTR.length;
 const SHORT = ['KICK', 'SNR', 'CLAP', 'HH C', 'HH O', 'TOM', 'RIM', 'COW'];
+let rec = null;
 let sel = 0, curStyle = -1, curSpeed = 1, padEls = [], numEls = [], nowStep = -1;
 
 const horiz = () => matchMedia('(orientation:landscape) and (min-width:640px)').matches;
@@ -182,10 +223,11 @@ matchMedia('(orientation:landscape) and (min-width:640px)').addEventListener('ch
 /* ---------- Transport ---------- */
 let wake = null;
 async function keepAwake(on) {
+  if (on && wake) return;
   try { if (on && navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); else if (wake) { await wake.release(); wake = null; } } catch (e) {}
 }
 function updatePlay() { const b = $('#play'); b.textContent = seq.playing ? '■ STOP' : '▶ PLAY'; b.classList.toggle('on', seq.playing); }
-function doToggle() { engine.init(); toggle(); if (!seq.playing) setNow(-1); updatePlay(); keepAwake(seq.playing); }
+function doToggle() { engine.init(); toggle(); if (!seq.playing) { setNow(-1); if (rec) rec.onStop(); document.querySelectorAll('#beats i').forEach(i => i.classList.remove('on')); } updatePlay(); keepAwake(seq.playing); }
 $('#play').addEventListener('click', doToggle);
 $('#clear').addEventListener('click', () => { pattern.forEach(r => r.fill(false)); refreshAll(); });
 addEventListener('keydown', e => {
@@ -196,7 +238,7 @@ addEventListener('keydown', e => {
 });
 
 /* ---------- Tempo, Swing, Lautstärke ---------- */
-function setBpm(b) { globals.bpm = Math.min(200, Math.max(60, Math.round(b))); syncGlobals(); }
+function setBpm(b) { if (rec && rec.locked()) return; globals.bpm = Math.min(200, Math.max(60, Math.round(b))); syncGlobals(); }
 function syncGlobals() {
   $('#bpmVal').textContent = globals.bpm; $('#bpm').value = globals.bpm;
   $('#swing').value = Math.round(globals.swing * 100); $('#swingV').textContent = Math.round(globals.swing * 100) + ' %';
@@ -220,6 +262,7 @@ const stopHold = () => { clearTimeout(hold); clearInterval(hold); };
 
 /* ---------- Rhythmen ---------- */
 function applyStyle() {
+  if (rec && rec.locked()) return;
   if (curStyle < 0) curStyle = 0;
   loadStyle(curStyle, curSpeed);
   refreshAll(); syncGlobals(); markStyles();
@@ -260,6 +303,7 @@ const store = {
 };
 const snapshot = () => ({ ...getState(), style: curStyle, speed: curSpeed, sel });
 function restore(s) {
+  if (rec && rec.locked()) { say('Gesperrt: Es sind Spuren aufgenommen (erst „Alle löschen“).'); return false; }
   if (!applyState(s)) return false;
   curStyle = Number.isInteger(s.style) && s.style >= 0 && s.style < STYLES.length ? s.style : -1;
   curSpeed = Number.isInteger(s.speed) && s.speed >= 0 && s.speed < SPEEDS.length ? s.speed : 1;
@@ -302,16 +346,77 @@ const saved = store.get('drum.last', null);
 if (saved) restore(saved);
 renderPresets();
 
+/* ---------- Aufnahme (4 Spuren) ---------- */
+function seg(id, items, onPick) {
+  const box = $(id); box.innerHTML = '';
+  items.forEach(([v, t]) => { const b = document.createElement('button'); b.textContent = t; b.dataset.v = v; b.addEventListener('click', () => onPick(v)); box.append(b); });
+}
+const markSeg = (id, v) => document.querySelectorAll(id + ' button').forEach(b => b.classList.toggle('on', b.dataset.v === String(v)));
+function renderRec() {
+  if (!rec) return;
+  const c = rec.cfg, lk = rec.locked();
+  markSeg('#r_loop', c.loopBars); markSeg('#r_count', c.countIn); markSeg('#r_metro', c.metro); markSeg('#r_src', c.source);
+  document.querySelectorAll('#r_loop button').forEach(b => { b.disabled = lk; });
+  $('#r_lat').value = c.latency || 0; $('#r_latV').textContent = (c.latency || 0) + ' ms';
+  $('#r_lat').disabled = c.source !== 'mic';
+  $('#r_mute').classList.toggle('on', c.drumsMute);
+  const names = { empty: 'Leer', armed: 'Wartet auf Takt-Anfang …', recording: '● Aufnahme läuft', ready: 'Bereit · läuft im Loop' };
+  document.querySelectorAll('.trk').forEach(el => {
+    const t = rec.tracks[+el.dataset.i];
+    el.className = 'trk ' + t.state;
+    el.querySelector('.st').textContent = names[t.state];
+    el.querySelector('.rec').textContent = t.state === 'armed' || t.state === 'recording' ? '■ Abbrechen' : (t.state === 'ready' ? '● Neu' : '● REC');
+    el.querySelector('.m').classList.toggle('on', t.mute);
+  });
+  ['#bpm', '#bpmMinus', '#bpmPlus'].forEach(id => { $(id).disabled = lk; });
+  document.querySelectorAll('#presets button,#styles button,#speeds button').forEach(b => { b.disabled = lk; });
+  $('#recMsg').textContent = rec.message + (lk ? ' · Tempo und Rhythmus sind gesperrt, bis alle Spuren gelöscht sind.' : '');
+}
+function buildRecUi() {
+  seg('#r_loop', [[1, '1 Takt'], [2, '2 Takte'], [4, '4 Takte']], v => rec.set('loopBars', v));
+  seg('#r_count', [[0, 'Aus'], [1, '1 Takt'], [2, '2 Takte']], v => rec.set('countIn', v));
+  seg('#r_metro', [[0, 'Aus'], [1, 'Blinken'], [2, 'Klick + Blinken']], v => rec.set('metro', v));
+  seg('#r_src', [['mic', 'Mikrofon'], ['drums', 'Drums']], v => rec.set('source', v));
+  $('#r_lat').addEventListener('input', e => rec.set('latency', +e.target.value));
+  $('#r_mute').addEventListener('click', () => rec.set('drumsMute', !rec.cfg.drumsMute));
+  $('#r_clearAll').addEventListener('click', () => { if (rec.locked() && !confirm('Alle 4 Spuren löschen?')) return; rec.clearAll(); });
+  $('#r_export').addEventListener('click', async () => {
+    $('#r_out').textContent = '';
+    const url = await rec.exportMix(2);
+    if (url) { const a = document.createElement('a'); a.href = url; a.download = 'drumcomputer-mix.wav'; a.textContent = '⬇ drumcomputer-mix.wav speichern'; $('#r_out').append(a); }
+  });
+  const box = $('#tracks');
+  for (let i = 0; i < 4; i++) {
+    const el = document.createElement('div'); el.className = 'trk'; el.dataset.i = i; el.style.setProperty('--tc', TRACK_COLORS[i]);
+    el.innerHTML = '<div class="head"><b>SPUR ' + (i + 1) + '</b><span class="st"></span></div><div class="bar"><i></i></div>' +
+      '<div class="row"><button class="rec">● REC</button><button class="m" aria-label="Stumm">M</button><input type="range" class="v" min="0" max="100" value="90" aria-label="Lautstärke"><button class="x" aria-label="Löschen">✕</button></div>';
+    el.querySelector('.rec').addEventListener('click', () => rec.record(i));
+    el.querySelector('.m').addEventListener('click', () => rec.setMute(i, !rec.tracks[i].mute));
+    el.querySelector('.v').addEventListener('input', e => rec.setVol(i, e.target.value / 100));
+    el.querySelector('.x').addEventListener('click', () => rec.clear(i));
+    box.append(el);
+  }
+}
+rec = createRecorder({ engine, seq, globals, STEPS, play, onChange: () => { renderRec(); updatePlay(); keepAwake(seq.playing); } });
+buildRecUi(); renderRec();
+function recFrame() {
+  const b = rec.tick();
+  if (b !== null) document.querySelectorAll('#beats i').forEach((el, i) => el.classList.toggle('on', i === b));
+  document.querySelectorAll('.trk .bar i').forEach((el, i) => { el.style.width = rec.progress(i) * 100 + '%'; });
+}
+
 /* ---------- Start ---------- */
 addEventListener('pointerup', () => engine.init());
 function frame() {
   requestAnimationFrame(frame);
+  if (rec) recFrame();
   if (engine.ctx && seq.playing) {
     while (seq.queue.length && seq.queue[0].time <= engine.ctx.currentTime) setNow(seq.queue.shift().step);
   }
 }
 buildGrid(); syncGlobals(); syncPanel(); markStyles(); updatePlay(); frame();
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+window.__rec = rec;
 window.__drum = { pattern, params, globals, seq, engine, STYLES };
 </script>
 </body>

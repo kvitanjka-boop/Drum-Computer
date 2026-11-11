@@ -32,7 +32,7 @@ export const engine = {
     this.master.gain.value = globals.volume;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.ratio.value = 4;
-    this.master.connect(comp); comp.connect(ctx.destination);
+    this.master.connect(comp); comp.connect(ctx.destination); this.comp = comp;
     const len = ctx.sampleRate * 2;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -139,13 +139,14 @@ export const engine = {
 };
 
 /* ---------------------------------------------------------------- Sequencer */
-export const seq = { playing: false, step: 0, nextTime: 0, queue: [], cur: -1, timer: null };
+export const seq = { playing: false, step: 0, nextTime: 0, queue: [], cur: -1, timer: null, cycleIdx: -1, cycleStart: 0, onCycle: null, mute: false };
 function scheduler() {
   const ctx = engine.ctx;
   while (seq.nextTime < ctx.currentTime + 0.12) {
     const dur = 60 / globals.bpm / globals.res;
     const t = seq.nextTime + (seq.step % 2 ? globals.swing * dur * 0.5 : 0);
-    for (let r = 0; r < R; r++) if (pattern[r][seq.step]) engine.trigger(r, t);
+    if (seq.step === 0) { seq.cycleIdx++; seq.cycleStart = seq.nextTime; if (seq.onCycle) seq.onCycle(seq.nextTime, seq.cycleIdx); }
+    if (!seq.mute) for (let r = 0; r < R; r++) if (pattern[r][seq.step]) engine.trigger(r, t);
     seq.queue.push({ step: seq.step, time: t });
     seq.step = (seq.step + 1) % STEPS;
     seq.nextTime += dur;
@@ -153,7 +154,7 @@ function scheduler() {
 }
 export function play() {
   engine.init();
-  seq.playing = true; seq.step = 0; seq.queue = [];
+  seq.playing = true; seq.step = 0; seq.queue = []; seq.cycleIdx = -1;
   seq.nextTime = engine.ctx.currentTime + 0.06;
   scheduler();
   seq.timer = setInterval(scheduler, 25);

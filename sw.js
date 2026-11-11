@@ -1,5 +1,5 @@
-const CACHE = 'drumcomputer-v5';
-const FILES = ['./', './index.html', './core.js', './3d.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
+const CACHE = 'drumcomputer-v6';
+const FILES = ['./', './index.html', './core.js', './recorder.js', './3d.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './vendor/three/three.module.js', './vendor/three/addons/controls/OrbitControls.js'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE)
