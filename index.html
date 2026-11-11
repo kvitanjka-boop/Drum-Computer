@@ -52,6 +52,14 @@
   .lab.sel{outline:2px solid currentColor;outline-offset:-2px}
   .num{font-size:11px;color:var(--mut);display:flex;align-items:center;justify-content:center}
   .num.now{color:#fff;font-weight:800}
+  #saveCard{order:6}
+  .txt{flex:1;min-width:0;height:44px;border-radius:10px;border:1px solid #333847;background:#0f1117;color:var(--txt);padding:0 12px;font:inherit;-webkit-user-select:text;user-select:text}
+  #saveBtn{height:44px;padding:0 16px;background:#27ae60;font-weight:700}
+  #plist{display:flex;flex-direction:column;gap:6px}
+  .item{display:flex;gap:6px}
+  .item .load{flex:1;text-align:left;height:44px;padding:0 12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .del{width:44px;height:44px;background:#3a2326;color:#ff8a8a}
+  #msg{font-size:12px;color:var(--mut);margin:0;min-height:1.2em}
   #panel h3{margin:0;font-size:15px;letter-spacing:.06em}
   #hint{font-size:12px;color:var(--mut);margin:0}
   /* Querformat: Raster links, Regler rechts */
@@ -103,11 +111,17 @@
       <p id="hint">Pad antippen = Schlag an/aus · Instrumentenname antippen = anhören und Regler wählen</p>
       <a href="3d.html">3D-Ansicht öffnen</a>
     </section>
+    <section class="card" id="saveCard">
+      <div class="lbl">MEINE PRESETS</div>
+      <div class="row"><input class="txt" id="pname" maxlength="24" placeholder="Name, z. B. Mein Beat" autocomplete="off"><button id="saveBtn">Speichern</button></div>
+      <p id="msg">Dein letzter Stand wird automatisch gespeichert.</p>
+      <div id="plist"></div>
+    </section>
   </aside>
 </div>
 
 <script type="module">
-import { STEPS, INSTR, pattern, params, globals, engine, seq, toggle, STYLES, SPEEDS, loadStyle } from './core.js';
+import { STEPS, INSTR, pattern, params, globals, engine, seq, toggle, STYLES, SPEEDS, loadStyle, getState, applyState } from './core.js';
 
 const $ = s => document.querySelector(s);
 const R = INSTR.length;
@@ -175,6 +189,7 @@ function doToggle() { engine.init(); toggle(); if (!seq.playing) setNow(-1); upd
 $('#play').addEventListener('click', doToggle);
 $('#clear').addEventListener('click', () => { pattern.forEach(r => r.fill(false)); refreshAll(); });
 addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'text') return;
   if (e.code === 'Space') { e.preventDefault(); doToggle(); }
   if (e.code === 'ArrowUp' || e.code === 'ArrowRight') { e.preventDefault(); setBpm(globals.bpm + 1); }
   if (e.code === 'ArrowDown' || e.code === 'ArrowLeft') { e.preventDefault(); setBpm(globals.bpm - 1); }
@@ -207,7 +222,9 @@ const stopHold = () => { clearTimeout(hold); clearInterval(hold); };
 function applyStyle() {
   if (curStyle < 0) curStyle = 0;
   loadStyle(curStyle, curSpeed);
-  refreshAll(); syncGlobals();
+  refreshAll(); syncGlobals(); markStyles();
+}
+function markStyles() {
   document.querySelectorAll('#styles button').forEach((b, i) => b.classList.toggle('on', i === curStyle));
   document.querySelectorAll('#speeds button').forEach((b, i) => b.classList.toggle('on', i === curSpeed));
 }
@@ -219,7 +236,6 @@ SPEEDS.forEach((n, i) => {
   const b = document.createElement('button'); b.textContent = n;
   b.addEventListener('click', () => { engine.init(); curSpeed = i; applyStyle(); }); $('#speeds').append(b);
 });
-document.querySelectorAll('#speeds button')[curSpeed].classList.add('on');
 
 /* ---------- Instrument-Regler ---------- */
 const fmtTune = v => (v < 0.5 ? '−' : '+') + Math.round(Math.abs(v - 0.5) * 200) + ' %';
@@ -237,6 +253,55 @@ function syncPanel() {
   s.addEventListener('change', () => { engine.init(); engine.trigger(sel, engine.ctx.currentTime); });
 });
 
+/* ---------- Speichern ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+};
+const snapshot = () => ({ ...getState(), style: curStyle, speed: curSpeed, sel });
+function restore(s) {
+  if (!applyState(s)) return false;
+  curStyle = Number.isInteger(s.style) && s.style >= 0 && s.style < STYLES.length ? s.style : -1;
+  curSpeed = Number.isInteger(s.speed) && s.speed >= 0 && s.speed < SPEEDS.length ? s.speed : 1;
+  sel = Number.isInteger(s.sel) && s.sel >= 0 && s.sel < R ? s.sel : 0;
+  if (engine.master) engine.master.gain.value = globals.volume;
+  if (padEls.length) refreshAll();
+  syncGlobals(); syncPanel(); markSel(); markStyles();
+  return true;
+}
+const say = t => { $('#msg').textContent = t; };
+function renderPresets() {
+  const list = store.get('drum.presets', []), box = $('#plist'); box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<p id="hint">Noch nichts gespeichert.</p>'; return; }
+  list.forEach((p, i) => {
+    const row = document.createElement('div'); row.className = 'item';
+    const l = document.createElement('button'); l.className = 'load'; l.textContent = `${p.name} · ${p.state.g.bpm} BPM`;
+    l.addEventListener('click', () => { if (restore(p.state)) say(`„${p.name}“ geladen.`); });
+    const d = document.createElement('button'); d.className = 'del'; d.textContent = '✕'; d.setAttribute('aria-label', 'Löschen');
+    d.addEventListener('click', () => {
+      if (!confirm(`„${p.name}“ löschen?`)) return;
+      const cur = store.get('drum.presets', []); cur.splice(i, 1); store.set('drum.presets', cur); renderPresets(); say('Gelöscht.');
+    });
+    row.append(l, d); box.append(row);
+  });
+}
+$('#saveBtn').addEventListener('click', () => {
+  const name = $('#pname').value.trim();
+  if (!name) { say('Bitte erst einen Namen eingeben.'); $('#pname').focus(); return; }
+  const list = store.get('drum.presets', []), at = list.findIndex(p => p.name === name);
+  const entry = { name, state: snapshot(), t: Date.now() };
+  if (at >= 0) list[at] = entry; else list.unshift(entry);
+  if (store.set('drum.presets', list)) { say(at >= 0 ? `„${name}“ überschrieben.` : `„${name}“ gespeichert.`); $('#pname').value = ''; renderPresets(); }
+  else say('Speichern nicht möglich (Browser blockiert den Speicher).');
+});
+// Letzten Stand automatisch merken
+let lastJson = '';
+setInterval(() => { const j = JSON.stringify(snapshot()); if (j !== lastJson) { lastJson = j; store.set('drum.last', JSON.parse(j)); } }, 1500);
+addEventListener('pagehide', () => store.set('drum.last', snapshot()));
+const saved = store.get('drum.last', null);
+if (saved) restore(saved);
+renderPresets();
+
 /* ---------- Start ---------- */
 addEventListener('pointerup', () => engine.init());
 function frame() {
@@ -245,7 +310,7 @@ function frame() {
     while (seq.queue.length && seq.queue[0].time <= engine.ctx.currentTime) setNow(seq.queue.shift().step);
   }
 }
-buildGrid(); syncGlobals(); syncPanel(); updatePlay(); frame();
+buildGrid(); syncGlobals(); syncPanel(); markStyles(); updatePlay(); frame();
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 window.__drum = { pattern, params, globals, seq, engine, STYLES };
 </script>

@@ -190,3 +190,25 @@ export function loadStyle(i, sp) {
   globals.res = st.res; globals.swing = st.sw; globals.bpm = st.bpm[sp];
   return st;
 }
+
+/* Speichern / Laden (Pattern, Instrument-Regler, Tempo, Swing, Lautstärke) */
+export function getState() {
+  return {
+    pattern: pattern.map(r => r.map(x => (x ? 'x' : '.')).join('')),
+    params: params.map(p => ({ tune: p.tune, decay: p.decay, level: p.level })),
+    g: { bpm: globals.bpm, swing: globals.swing, volume: globals.volume, res: globals.res },
+  };
+}
+const clamp = (v, a, b, d) => (typeof v === 'number' && isFinite(v) ? Math.min(b, Math.max(a, v)) : d);
+export function applyState(s) {
+  if (!s || !Array.isArray(s.pattern) || !Array.isArray(s.params) || !s.g) return false;
+  s.pattern.slice(0, INSTR.length).forEach((str, r) => { for (let i = 0; i < STEPS; i++) pattern[r][i] = typeof str === 'string' && str[i] === 'x'; });
+  s.params.slice(0, INSTR.length).forEach((p, r) => {
+    params[r].tune = clamp(p.tune, 0, 1, 0.5); params[r].decay = clamp(p.decay, 0, 1, 0.5); params[r].level = clamp(p.level, 0, 1, 0.8);
+  });
+  globals.bpm = Math.round(clamp(s.g.bpm, 60, 200, 120));
+  globals.swing = clamp(s.g.swing, 0, 1, 0);
+  globals.volume = clamp(s.g.volume, 0, 1, 0.8);
+  globals.res = s.g.res === 2 ? 2 : 4;
+  return true;
+}
