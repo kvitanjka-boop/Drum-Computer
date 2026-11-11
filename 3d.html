@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Drumcomputer 3D</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0d0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<style>
+  html,body{margin:0;height:100%;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;background:#0d0f14;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#aeb4c2}
+  canvas{display:block;touch-action:none}
+  #hud{position:fixed;left:14px;bottom:calc(10px + env(safe-area-inset-bottom));right:14px;-webkit-text-size-adjust:100%;font-size:13px;line-height:1.55;pointer-events:none}
+  @media (pointer:coarse){#hud{font-size:11px}#readout{font-size:14px!important}}
+  #readout{color:#fff;font-weight:600;font-size:16px;min-height:1.5em}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+</head>
+<body>
+<a href="./" style="position:fixed;right:14px;top:calc(10px + env(safe-area-inset-top));z-index:5;background:#2a2e3a;color:#dfe3ec;padding:10px 14px;border-radius:10px;text-decoration:none;font-size:14px">← 2D-Ansicht</a>
+<div id="hud">
+  <div id="readout">&nbsp;</div>
+  <div id="hint">Pads anklicken · Knöpfe mit der Maus hoch/runter ziehen · Leertaste = Play/Stop · Pfeiltasten = BPM · Leere Fläche ziehen = drehen, Mausrad = Zoom</div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ---------------------------------------------------------------- Daten */
+const STEPS = 16;
+const INSTR = [
+  { name: 'KICK',  color: '#ff4136' },
+  { name: 'SNARE', color: '#ff851b' },
+  { name: 'CLAP',  color: '#ffdc00' },
+  { name: 'HH CL', color: '#2ecc40' },
+  { name: 'HH OP', color: '#39cccc' },
+  { name: 'TOM',   color: '#2d8cff' },
+  { name: 'RIM',   color: '#b10dc9' },
+  { name: 'COW',   color: '#f012be' },
+];
+const R = INSTR.length;
+const pattern = INSTR.map(() => new Array(STEPS).fill(false));
+[0,4,8,12].forEach(i => pattern[0][i] = true);
+[4,12].forEach(i => pattern[1][i] = true);
+[12].forEach(i => pattern[2][i] = true);
+[0,2,4,6,8,10,12].forEach(i => pattern[3][i] = true);
+[14].forEach(i => pattern[4][i] = true);
+[10].forEach(i => pattern[7][i] = true);
+
+const params = INSTR.map(() => ({ tune: 0.5, decay: 0.5, level: 0.8 }));
+const globals = { bpm: 120, swing: 0, volume: 0.8, res: 4 };
+
+/* ---------------------------------------------------------------- Audio */
+const engine = {
+  ctx: null, master: null, noise: null, openHat: null,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const ctx = this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.master = ctx.createGain();
+    this.master.gain.value = globals.volume;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.ratio.value = 4;
+    this.master.connect(comp); comp.connect(ctx.destination);
+    const len = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+    const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    s.connect(ctx.destination); s.start(0);
+  },
+  ratio(t) { return 0.5 * Math.pow(2, t * 2); },
+  gain(t, peak, dec) {
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dec);
+    g.connect(this.master);
+    return g;
+  },
+  osc(type, f, t, dur) {
+    const o = this.ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t);
+    o.start(t); o.stop(t + dur); return o;
+  },
+  noiseSrc(t, dur) {
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise; s.loop = true;
+    s.start(t, Math.random()); s.stop(t + dur); return s;
+  },
+  filter(type, f, q = 1) {
+    const x = this.ctx.createBiquadFilter(); x.type = type; x.frequency.value = f; x.Q.value = q; return x;
+  },
+  trigger(r, t) { this.voices[r].call(this, t, params[r]); },
+  voices: [
+    // KICK
+    function (t, p) {
+      const r = this.ratio(p.tune), dec = 0.15 + p.decay * 0.85;
+      const o = this.osc('sine', 150 * r, t, dec + 0.05);
+      o.frequency.exponentialRampToValueAtTime(48 * r, t + 0.07);
+      o.connect(this.gain(t, p.level, dec));
+      const n = this.noiseSrc(t, 0.02), f = this.filter('lowpass', 3000);
+      n.connect(f); f.connect(this.gain(t, 0.3 * p.level, 0.012));
+    },
+    // SNARE
+    function (t, p) {
+      const r = this.ratio(p.tune), dec = 0.08 + p.decay * 0.4;
+      this.osc('triangle', 185 * r, t, 0.2).connect(this.gain(t, 0.6 * p.level, 0.1));
+      this.osc('triangle', 330 * r, t, 0.2).connect(this.gain(t, 0.4 * p.level, 0.07));
+      const n = this.noiseSrc(t, dec + 0.05), f = this.filter('highpass', 1500);
+      n.connect(f); f.connect(this.gain(t, 0.8 * p.level, dec));
+    },
+    // CLAP
+    function (t, p) {
+      const r = this.ratio(p.tune), lv = p.level * 0.9, tail = 0.05 + p.decay * 0.3;
+      const n = this.noiseSrc(t, 0.5), f = this.filter('bandpass', 1300 * r, 1.2);
+      const g = this.ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
+      for (let k = 0; k < 3; k++) {
+        const tk = t + k * 0.012;
+        g.gain.setValueAtTime(lv, tk);
+        g.gain.exponentialRampToValueAtTime(0.02, tk + 0.01);
+      }
+      g.gain.setValueAtTime(lv, t + 0.036);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.036 + tail);
+      n.connect(f); f.connect(g); g.connect(this.master);
+    },
+    // HH closed
+    function (t, p) {
+      if (this.openHat) { try { this.openHat.gain.cancelScheduledValues(t); this.openHat.gain.setTargetAtTime(0, t, 0.004); } catch (e) {} }
+      this.metal(t, p, 0.02 + p.decay * 0.12);
+    },
+    // HH open
+    function (t, p) { this.openHat = this.metal(t, p, 0.15 + p.decay * 0.8); },
+    // TOM
+    function (t, p) {
+      const r = this.ratio(p.tune), dec = 0.15 + p.decay * 0.6;
+      const o = this.osc('sine', 200 * r, t, dec + 0.05);
+      o.frequency.exponentialRampToValueAtTime(110 * r, t + 0.1);
+      o.connect(this.gain(t, p.level, dec));
+    },
+    // RIM
+    function (t, p) {
+      const r = this.ratio(p.tune), dec = 0.02 + p.decay * 0.07;
+      const f = this.filter('highpass', 300);
+      this.osc('sine', 1700 * r, t, dec + 0.02).connect(f);
+      this.osc('triangle', 480 * r, t, dec + 0.02).connect(f);
+      const g = this.gain(t, 0.7 * p.level, dec); f.connect(g);
+    },
+    // COWBELL
+    function (t, p) {
+      const r = this.ratio(p.tune), dec = 0.08 + p.decay * 0.5;
+      const f = this.filter('bandpass', 1500 * r, 1);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.5 * p.level, t);
+      g.gain.exponentialRampToValueAtTime(0.15 * p.level, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dec);
+      this.osc('square', 540 * r, t, dec + 0.02).connect(f);
+      this.osc('square', 800 * r, t, dec + 0.02).connect(f);
+      f.connect(g); g.connect(this.master);
+    },
+  ],
+  metal(t, p, dec) {
+    const r = this.ratio(p.tune);
+    const bp = this.filter('bandpass', 10000, 0.8), hp = this.filter('highpass', 7000);
+    [205.3, 304.4, 369.6, 522.7, 540, 800].forEach(f => this.osc('square', f * r * 1.0, t, dec + 0.05).connect(bp));
+    bp.connect(hp);
+    const g = this.gain(t, 0.35 * p.level, dec); hp.connect(g);
+    return g;
+  },
+};
+
+/* ---------------------------------------------------------------- Sequencer */
+const seq = { playing: false, step: 0, nextTime: 0, queue: [], cur: -1, timer: null };
+function scheduler() {
+  const ctx = engine.ctx;
+  while (seq.nextTime < ctx.currentTime + 0.12) {
+    const dur = 60 / globals.bpm / globals.res;
+    const t = seq.nextTime + (seq.step % 2 ? globals.swing * dur * 0.5 : 0);
+    for (let r = 0; r < R; r++) if (pattern[r][seq.step]) engine.trigger(r, t);
+    seq.queue.push({ step: seq.step, time: t });
+    seq.step = (seq.step + 1) % STEPS;
+    seq.nextTime += dur;
+  }
+}
+function play() {
+  engine.init();
+  seq.playing = true; seq.step = 0; seq.queue = [];
+  seq.nextTime = engine.ctx.currentTime + 0.06;
+  scheduler();
+  seq.timer = setInterval(scheduler, 25);
+  playLabel.set('STOP', '#ffffff'); playMat.color.set('#c0392b'); playMat.emissive.set('#c0392b');
+}
+function stop() {
+  seq.playing = false; clearInterval(seq.timer); seq.queue = []; seq.cur = -1;
+  playLabel.set('PLAY', '#ffffff'); playMat.color.set('#27ae60'); playMat.emissive.set('#27ae60');
+}
+const toggle = () => seq.playing ? stop() : play();
+
+/* ---------------------------------------------------------------- Szene */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const canvas = renderer.domElement;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0d0f14');
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
+
+scene.add(new THREE.HemisphereLight('#c8d4ff', '#202030', 0.9));
+const sun = new THREE.DirectionalLight('#ffffff', 1.5);
+sun.position.set(-8, 24, 14);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 18, bottom: -18, near: 1, far: 70 });
+scene.add(sun);
+
+const BODY_TOP = 0.5;
+const CX = -0.3, CZ = 0.5;
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: '#141720', roughness: 0.9 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -0.5; floor.receiveShadow = true;
+scene.add(floor);
+
+const body = new THREE.Mesh(new THREE.BoxGeometry(30, 1, 21), new THREE.MeshStandardMaterial({ color: '#262a34', roughness: 0.55, metalness: 0.2 }));
+body.position.set(CX, 0, CZ); body.castShadow = body.receiveShadow = true;
+scene.add(body);
+
+const hits = [];
+const mk = (geo, mat, x, y, z, parent = scene) => {
+  const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z);
+  m.castShadow = m.receiveShadow = true; parent.add(m); return m;
+};
+
+function makeText(text, w, h, { font = 60, color = '#e8e8e8', weight = 700 } = {}) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(w * 128); cv.height = Math.round(h * 128);
+  const c = cv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 8; tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+  mesh.rotation.x = -Math.PI / 2;
+  const set = (t, col = color) => {
+    c.clearRect(0, 0, cv.width, cv.height);
+    c.fillStyle = col; c.font = `${weight} ${font}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(t, cv.width / 2, cv.height / 2 + 2); tex.needsUpdate = true;
+  };
+  set(text);
+  return { mesh, set };
+}
+function label(text, x, z, w, h, opts) {
+  const l = makeText(text, w, h, opts); l.mesh.position.set(x, BODY_TOP + 0.01, z); scene.add(l.mesh); return l;
+}
+
+/* Knöpfe */
+const readout = document.getElementById('readout');
+const darkMat = new THREE.MeshStandardMaterial({ color: '#15171d', roughness: 0.6 });
+const knobMat = new THREE.MeshStandardMaterial({ color: '#2c2f38', roughness: 0.35, metalness: 0.5 });
+const knobs = [];
+function makeKnob(x, z, color, value, onChange, fmt, name) {
+  const g = new THREE.Group(); g.position.set(x, BODY_TOP, z); scene.add(g);
+  mk(new THREE.CylinderGeometry(0.62, 0.66, 0.14, 32), darkMat, 0, 0.07, 0, g);
+  const rot = new THREE.Group(); rot.position.y = 0.14; g.add(rot);
+  const parts = [
+    mk(new THREE.CylinderGeometry(0.46, 0.5, 0.5, 32), knobMat, 0, 0.25, 0, rot),
+    mk(new THREE.CylinderGeometry(0.34, 0.34, 0.06, 32), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }), 0, 0.53, 0, rot),
+    mk(new THREE.BoxGeometry(0.09, 0.08, 0.42), new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.4 }), 0, 0.55, -0.2, rot),
+  ];
+  const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.9, 16), new THREE.MeshBasicMaterial());
+  proxy.position.y = 0.4; proxy.visible = false; g.add(proxy);
+  parts.push(proxy);
+  const k = {
+    type: 'knob', name, value: 0, def: value,
+    set(v, silent) {
+      this.value = Math.min(1, Math.max(0, v));
+      rot.rotation.y = -(this.value - 0.5) * Math.PI * 1.5;
+      onChange(this.value);
+      if (!silent) readout.textContent = `${name}  ${fmt(this.value)}`;
+    },
+  };
+  parts.forEach(m => { m.userData.ref = k; hits.push(m); });
+  k.set(value, true); knobs.push(k);
+  return k;
+}
+
+/* Instrumenten-Reihen */
+const ROW_Z0 = -4.5, ROW_DZ = 1.55;
+const PAD_X0 = -5.0;
+const padX = i => PAD_X0 + i * 1.1 + Math.floor(i / 4) * 0.3;
+const rowZ = r => ROW_Z0 + r * ROW_DZ;
+const padGeo = new THREE.BoxGeometry(0.95, 0.3, 1.0);
+const pads = [];
+
+['TUNE', 'DECAY', 'LEVEL'].forEach((n, j) => label(n, -9.7 + j * 1.6, -5.75, 1.5, 0.45, { font: 44, color: '#8890a0' }));
+
+INSTR.forEach((ins, r) => {
+  const z = rowZ(r);
+  const lab = makeText(ins.name, 2.7, 0.9, { font: 66, color: ins.color });
+  lab.mesh.position.set(-12.2, BODY_TOP + 0.01, z); scene.add(lab.mesh);
+  lab.mesh.userData.ref = { type: 'audition', r }; hits.push(lab.mesh);
+
+  ['tune', 'decay', 'level'].forEach((key, j) => {
+    const fmt = key === 'level' ? v => Math.round(v * 100) + ' %' : v => (v < 0.5 ? '−' : '+') + Math.round(Math.abs(v - 0.5) * 200) + ' %';
+    makeKnob(-9.7 + j * 1.6, z, ins.color, params[r][key], v => { params[r][key] = v; },
+      key === 'decay' ? v => Math.round(v * 100) + ' %' : fmt, `${ins.name} · ${key.toUpperCase()}`);
+  });
+
+  pads[r] = [];
+  for (let i = 0; i < STEPS; i++) {
+    const mat = new THREE.MeshStandardMaterial({ color: '#3a3d46', roughness: 0.45, metalness: 0.1 });
+    const m = mk(padGeo, mat, padX(i), BODY_TOP + 0.15, z);
+    m.userData.ref = { type: 'pad', r, i, mesh: m, pulse: 0 };
+    hits.push(m); pads[r][i] = m;
+  }
+});
+
+/* Playhead-LEDs */
+const leds = [];
+for (let i = 0; i < STEPS; i++) {
+  const m = new THREE.MeshStandardMaterial({ color: '#331111', emissive: '#ff2200', emissiveIntensity: 0 });
+  leds.push(mk(new THREE.SphereGeometry(0.17, 16, 12), m, padX(i), BODY_TOP + 0.1, -5.75));
+}
+
+/* Transport + Global */
+const playMat = new THREE.MeshStandardMaterial({ color: '#27ae60', emissive: '#27ae60', emissiveIntensity: 0.25, roughness: 0.4 });
+const clearMat = new THREE.MeshStandardMaterial({ color: '#555b6b', roughness: 0.4 });
+const playBtn = mk(new THREE.BoxGeometry(2.4, 0.5, 1.2), playMat, -12.2, BODY_TOP + 0.25, -8.3);
+playBtn.userData.ref = { type: 'play', mesh: playBtn, down: 0 }; hits.push(playBtn);
+const clearBtn = mk(new THREE.BoxGeometry(2.0, 0.5, 1.2), clearMat, -9.5, BODY_TOP + 0.25, -8.3);
+clearBtn.userData.ref = { type: 'clear', mesh: clearBtn, down: 0 }; hits.push(clearBtn);
+const playLabel = makeText('PLAY', 2.2, 0.8, { font: 60 });
+playLabel.mesh.position.set(-12.2, BODY_TOP + 0.51, -8.3); scene.add(playLabel.mesh);
+const clearLabel = makeText('CLEAR', 1.8, 0.8, { font: 52 });
+clearLabel.mesh.position.set(-9.5, BODY_TOP + 0.51, -8.3); scene.add(clearLabel.mesh);
+playMat.emissiveIntensity = 0.3;
+
+/* BPM-Anzeige, −/+ und Tempo-Voreinstellungen */
+const btns = [];
+function makeBtn(x, z, w, d, text, font, color, fn, hold) {
+  const m = mk(new THREE.BoxGeometry(w, 0.4, d), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }), x, BODY_TOP + 0.2, z);
+  m.userData.ref = { type: 'btn', fn, hold, down: 0, baseY: BODY_TOP + 0.2 };
+  hits.push(m); btns.push(m);
+  const l = makeText(text, w - 0.1, d - 0.1, { font }); l.mesh.position.set(x, BODY_TOP + 0.41, z); scene.add(l.mesh);
+  return m;
+}
+const lcdBox = mk(new THREE.BoxGeometry(2.8, 0.15, 1.2), new THREE.MeshStandardMaterial({ color: '#10160f', roughness: 0.3 }), 1.9, BODY_TOP + 0.07, -8.6);
+const lcd = makeText('120 BPM', 2.6, 1.0, { font: 62, color: '#9dff6a' });
+lcd.mesh.position.set(1.9, BODY_TOP + 0.16, -8.6); scene.add(lcd.mesh);
+let tempoKnob;
+const setBpm = b => tempoKnob.set((Math.min(200, Math.max(60, b)) - 60) / 140);
+makeBtn(0.9, -7.35, 1.2, 0.8, '−', 70, '#555b6b', () => setBpm(globals.bpm - 1), true);
+makeBtn(2.9, -7.35, 1.2, 0.8, '+', 70, '#555b6b', () => setBpm(globals.bpm + 1), true);
+[80, 100, 120, 140, 170].forEach((b, i) => makeBtn(5.2 + i * 1.5, -7.2, 1.3, 0.8, String(b), 46, '#3d6fa8', () => setBpm(b)));
+label('TEMPO-VORGABEN', 8.2, -6.55, 8, 0.4, { font: 40, color: '#8890a0' });
+tempoKnob = makeKnob(-5.5, -8.3, '#e8e8e8', (globals.bpm - 60) / 140,
+  v => { globals.bpm = Math.round(60 + v * 140); lcd.set(globals.bpm + ' BPM', '#9dff6a'); },
+  () => globals.bpm + ' BPM', 'TEMPO');
+const swingKnob = makeKnob(-3.2, -8.3, '#e8e8e8', 0, v => { globals.swing = v; }, v => Math.round(v * 100) + ' %', 'SWING');
+makeKnob(-0.9, -8.3, '#e8e8e8', globals.volume, v => { globals.volume = v; if (engine.master) engine.master.gain.value = v; }, v => Math.round(v * 100) + ' %', 'VOLUME');
+label('TEMPO', -5.5, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
+label('SWING', -3.2, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
+label('VOLUME', -0.9, -7.2, 1.8, 0.45, { font: 44, color: '#8890a0' });
+label('DRUMCOMPUTER', 8.2, -8.3, 9, 1.3, { font: 96, color: '#ff851b', weight: 800 });
+
+/* Rhythmen: Stil x Geschwindigkeit */
+const E = '................';
+// Spuren: k=Kick s=Snare c=Clap h=HH zu o=HH offen t=Tom r=Rim w=Cowbell
+const STYLES = [
+  { n: 'ROCK',   bpm: [80, 120, 160],  sw: 0,    res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x...', o: '..............x.' } },
+  { n: 'BLUES',  bpm: [60, 90, 130],   sw: 0.67, res: 2, p: { k: 'x...x...x...x...', s: '..x...x...x...x.', h: 'xxxxxxxxxxxxxxxx' } },
+  { n: 'HIP-HOP',bpm: [75, 90, 100],   sw: 0.35, res: 4, p: { k: 'x.....x...x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.', o: '.............x..' } },
+  { n: 'TRAP',   bpm: [120, 140, 160], sw: 0,    res: 4, p: { k: 'x.........x.....', s: '........x.......', c: '........x.......', h: 'x.x.x.x.x.x.xxxx' } },
+  { n: 'SOUL',   bpm: [70, 90, 115],   sw: 0.3,  res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.', r: '......x.......x.' } },
+  { n: 'FUNK',   bpm: [95, 108, 120],  sw: 0.2,  res: 4, p: { k: 'x..x...x..x.....', s: '....x..x.x..x...', h: 'xxxxxxxxxxxxxxxx', o: '......x.......x.' } },
+  { n: 'DISCO',  bpm: [110, 120, 128], sw: 0,    res: 4, p: { k: 'x...x...x...x...', s: '....x.......x...', c: '....x.......x...', h: '.x.x.x.x.x.x.x.x', o: '..x...x...x...x.' } },
+  { n: 'REGGAE', bpm: [65, 75, 85],    sw: 0.15, res: 4, p: { k: '........x.......', r: '........x.......', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'HOUSE',  bpm: [118, 124, 130], sw: 0,    res: 4, p: { k: 'x...x...x...x...', c: '....x.......x...', h: '.x.x.x.x.x.x.x.x', o: '..x...x...x...x.' } },
+  { n: 'TECHNO', bpm: [128, 135, 145], sw: 0,    res: 4, p: { k: 'x...x...x...x...', c: '....x.......x...', h: 'xxxxxxxxxxxxxxxx', o: '..x...x...x...x.', r: '.x.....x..x.....' } },
+  { n: 'POP',    bpm: [95, 110, 125],  sw: 0,    res: 4, p: { k: 'x.......x.x.....', s: '....x.......x...', c: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'D&B',    bpm: [160, 170, 180], sw: 0,    res: 4, p: { k: 'x.........x.....', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' } },
+  { n: 'JAZZ',   bpm: [90, 120, 160],  sw: 0.67, res: 2, p: { k: 'x.......x.......', s: '...x.......x....', h: 'x.xxx.xxx.xxx.xx' } },
+  { n: 'LATIN',  bpm: [90, 105, 120],  sw: 0.1,  res: 4, p: { k: 'x.....x.x.....x.', r: 'x..x..x...x.x...', h: 'x.x.x.x.x.x.x.x.', w: 'x...x...x...x...' } },
+];
+const SPEEDS = ['LANGSAM', 'MITTEL', 'SCHNELL'];
+const KEYS = ['k', 's', 'c', 'h', 'o', 't', 'r', 'w'];
+let curStyle = -1, curSpeed = 1;
+const styleBtns = [], speedBtns = [];
+const styleBox = mk(new THREE.BoxGeometry(7.2, 0.15, 1.2), new THREE.MeshStandardMaterial({ color: '#10160f', roughness: 0.3 }), 2.2, BODY_TOP + 0.07, 9.6);
+const styleLcd = makeText('RHYTHMUS WÄHLEN', 7.0, 1.0, { font: 52, color: '#9dff6a' });
+styleLcd.mesh.position.set(2.2, BODY_TOP + 0.16, 9.6); scene.add(styleLcd.mesh);
+label('RHYTHMEN', -13.7, 7.0, 2.4, 0.4, { font: 38, color: '#8890a0' });
+
+function applyStyle() {
+  if (curStyle < 0) curStyle = 0;
+  const st = STYLES[curStyle];
+  KEYS.forEach((k, r) => { const str = st.p[k] || E; for (let i = 0; i < STEPS; i++) pattern[r][i] = str[i] === 'x'; });
+  globals.res = st.res;
+  swingKnob.set(st.sw, true);
+  setBpm(st.bpm[curSpeed]);
+  styleBtns.forEach((b, i) => b.material.color.set(i === curStyle ? '#e08a10' : '#4a4f66'));
+  speedBtns.forEach((b, i) => b.material.color.set(i === curSpeed ? '#e08a10' : '#4a4f66'));
+  styleLcd.set(`${st.n} · ${SPEEDS[curSpeed]}`, '#9dff6a');
+  readout.textContent = `${st.n} · ${SPEEDS[curSpeed]} · ${globals.bpm} BPM`;
+}
+STYLES.forEach((st, i) => styleBtns.push(makeBtn(-12.5 + i * 1.95, 7.8, 1.75, 0.8, st.n, 38, '#4a4f66', () => { curStyle = i; applyStyle(); })));
+SPEEDS.forEach((n, i) => speedBtns.push(makeBtn(-12.2 + i * 2.5, 9.6, 2.3, 0.9, n, 40, '#4a4f66', () => { curSpeed = i; applyStyle(); })));
+speedBtns[1].material.color.set('#e08a10');
+
+const machine = new THREE.Group();
+[...scene.children].filter(o => !o.isLight && o !== floor).forEach(o => machine.add(o));
+scene.add(machine);
+
+/* ---------------------------------------------------------------- Steuerung */
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+function pick(e) {
+  const rc = canvas.getBoundingClientRect();
+  mouse.set(((e.clientX - rc.left) / rc.width) * 2 - 1, -((e.clientY - rc.top) / rc.height) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const h = ray.intersectObjects(hits, false)[0];
+  return h ? h.object.userData.ref : null;
+}
+let holdTimer = null;
+let drag = null, controls, lastTap = { ref: null, t: 0 };
+canvas.addEventListener('pointerdown', e => {
+  engine.init();
+  const ref = pick(e);
+  if (!ref) return;
+  if (drag) return;                       // zweiter Finger während eines Knopf-Drags
+  controls.enabled = false;
+  if (ref.type === 'knob') {
+    const now = performance.now();
+    if (lastTap.ref === ref && now - lastTap.t < 400) { ref.set(ref.def); lastTap = { ref: null, t: 0 }; return; }
+    lastTap = { ref, t: now };
+    drag = { ref, y: e.clientY, v: ref.value, id: e.pointerId };
+    canvas.setPointerCapture(e.pointerId);
+    readout.textContent = `${ref.name}`;
+  } else if (ref.type === 'pad') {
+    pattern[ref.r][ref.i] = !pattern[ref.r][ref.i];
+    if (pattern[ref.r][ref.i]) engine.trigger(ref.r, engine.ctx.currentTime);
+    if (navigator.vibrate) navigator.vibrate(8);
+  } else if (ref.type === 'audition') {
+    engine.trigger(ref.r, engine.ctx.currentTime);
+  } else if (ref.type === 'play') {
+    ref.down = 1; toggle();
+  } else if (ref.type === 'clear') {
+    ref.down = 1; pattern.forEach(row => row.fill(false));
+  } else if (ref.type === 'btn') {
+    ref.down = 1; ref.fn();
+    if (ref.hold) {
+      clearTimeout(holdTimer); clearInterval(holdTimer);
+      holdTimer = setTimeout(() => { holdTimer = setInterval(ref.fn, 70); }, 380);
+    }
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  if (drag) {
+    if (e.pointerId === drag.id) drag.ref.set(drag.v + (drag.y - e.clientY) / (e.shiftKey ? 600 : 200));
+  } else if (e.pointerType === 'mouse') {
+    canvas.style.cursor = pick(e) ? 'pointer' : 'grab';
+  }
+});
+const release = e => {
+  clearTimeout(holdTimer); clearInterval(holdTimer);
+  if (drag && e && e.pointerId !== drag.id) return;
+  drag = null; if (controls) controls.enabled = true;
+  engine.init();                          // iOS: Audio erst nach Loslassen sicher freigeschaltet
+};
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); engine.init(); toggle(); }
+  if (e.code === 'ArrowUp' || e.code === 'ArrowRight') { e.preventDefault(); setBpm(globals.bpm + 1); }
+  if (e.code === 'ArrowDown' || e.code === 'ArrowLeft') { e.preventDefault(); setBpm(globals.bpm - 1); }
+});
+
+controls = new OrbitControls(camera, canvas);
+controls.enablePan = true; controls.screenSpacePanning = true; controls.enableDamping = true;
+controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+controls.minPolarAngle = 0.15; controls.maxPolarAngle = 1.45;
+controls.minDistance = 6; controls.maxDistance = 120;
+
+const target = new THREE.Vector3(CX, 0, CZ);
+const dir = new THREE.Vector3(0, 0.9, 0.44).normalize();
+let lastW = 0;
+function fit() {
+  const w = innerWidth, h = innerHeight; lastW = w;
+  const portrait = h > w * 1.1;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  machine.rotation.y = portrait ? -Math.PI / 2 : 0; machine.updateMatrixWorld(true);
+  target.set(CX, 0, CZ); machine.localToWorld(target);
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const d = portrait ? Math.max(12.5 / (t * camera.aspect), 16.5 / t) : Math.max(17.5 / (t * camera.aspect), 12 / t);
+  camera.position.copy(target).addScaledVector(dir, d);
+  controls.target.copy(target); controls.update();
+}
+addEventListener('resize', () => {
+  if (innerWidth !== lastW) fit();        // Adressleiste am Handy ein-/ausblenden ändert nur die Höhe
+  else { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+});
+fit();
+if (matchMedia('(pointer:coarse)').matches)
+  document.getElementById('hint').textContent = 'Pads antippen · Knöpfe hoch/runter ziehen · Doppeltippen = zurücksetzen · 1 Finger = verschieben · 2 Finger = zoomen/drehen';
+
+/* ---------------------------------------------------------------- Loop */
+const clock = new THREE.Clock();
+const baseCol = i => (Math.floor(i / 4) % 2 ? '#464a55' : '#363943');
+const tmp = new THREE.Color();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = clock.getDelta();
+
+  if (engine.ctx && seq.playing) {
+    while (seq.queue.length && seq.queue[0].time <= engine.ctx.currentTime) {
+      const q = seq.queue.shift(); seq.cur = q.step;
+      for (let r = 0; r < R; r++) if (pattern[r][q.step]) pads[r][q.step].userData.ref.pulse = 1;
+    }
+  }
+
+  for (let r = 0; r < R; r++) for (let i = 0; i < STEPS; i++) {
+    const m = pads[r][i], ref = m.userData.ref, on = pattern[r][i], now = seq.cur === i;
+    ref.pulse = Math.max(0, ref.pulse - dt * 4);
+    m.material.color.set(on ? INSTR[r].color : baseCol(i));
+    m.material.emissive.set(on ? INSTR[r].color : '#ffffff');
+    m.material.emissiveIntensity = on ? 0.3 + (now ? 0.5 : 0) + ref.pulse * 1.2 : (now ? 0.22 : 0);
+    m.scale.y = 1 + ref.pulse * 0.8;
+  }
+  leds.forEach((l, i) => { l.material.emissiveIntensity = seq.cur === i ? 2 : 0; });
+
+  [playBtn, clearBtn, ...btns].forEach(b => {
+    const ref = b.userData.ref; ref.down = Math.max(0, ref.down - dt * 5);
+    b.position.y = (ref.baseY ?? BODY_TOP + 0.25) - ref.down * 0.12;
+  });
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+frame();
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+window.__drum = { pattern, params, globals, seq, engine, play, stop, knobs, STYLES, applyStyle, setStyle: (i, sp) => { curStyle = i; curSpeed = sp; applyStyle(); } };
+</script>
+</body>
+</html>

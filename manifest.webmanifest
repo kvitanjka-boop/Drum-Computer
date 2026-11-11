@@ -1,11 +1,11 @@
 {
-  "name": "Drumcomputer 3D",
+  "name": "Drumcomputer",
   "short_name": "Drums",
   "description": "3D-Drumcomputer mit 8 Instrumenten, 16-Step-Sequencer und Rhythmen",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "landscape",
+  "orientation": "any",
   "background_color": "#0d0f14",
   "theme_color": "#0d0f14",
   "icons": [
